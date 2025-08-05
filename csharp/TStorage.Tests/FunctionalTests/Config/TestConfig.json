@@ -1,0 +1,24 @@
+{
+    "TestConfig": {
+        "dtimestampBinPath": "/home/tstorage/bin/DTimestamp",
+        "dtimestampParamsPath": "/home/tstorage/Desktop/configs/DTimestamp.conf",
+        "dtimestampLogPath": "/home/tstorage/logs/DTimestamp.bin",
+
+        "uscontainerBinPath": "/home/tstorage/bin/USContainer",
+        "uscontainerParamsPath": "/home/tstorage/Desktop/configs/USContainer.conf",
+        "uscontainerLogPath": "/home/tstorage/logs/USContainer.bin",
+        "uscontainerSacksPath": "/sacks/",
+
+        "usconnectorBinPath": "/home/tstorage/bin/USConnector",
+        "usconnectorParamsPath": "/home/tstorage/Desktop/configs/USConnector.conf",
+        "usconnectorLogPath": "/home/tstorage/logs/USConnector.bin",
+
+        "ustrackerBinPath": "/home/tstorage/bin/USTracker",
+        "ustrackerParamsPath": "/home/tstorage/Desktop/configs/USTracker.conf",
+        "ustrackerLogPath": "/home/tstorage/logs/USTracker.bin",
+
+        "networkToleranceIntervalMs": 1000,
+        "usconnectorListenAddres": "127.0.0.1",
+        "usconnectorListenPort": 2025
+    }
+}

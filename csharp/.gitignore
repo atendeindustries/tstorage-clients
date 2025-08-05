@@ -1,0 +1,11 @@
+TStorage/bin
+TStorage/obj
+TStorage/docs
+
+TStorage.Tests/bin
+TStorage.Tests/obj
+
+ExampleApp/bin
+ExampleApp/obj
+
+.vscode

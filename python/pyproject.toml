@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools >= 78.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+requires-python = ">= 3.10"
+name = "tstorage-client"
+description = "TStorage Python client library"
+version = "1.0.0"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+readme = "README.md"
+authors = [
+]
+keywords = ["tstorage", "asyncio", "client", "database"]
+classifiers = [
+  "Private :: Do not Upload",  # Remove to publish in PyPi
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Topic :: Software Development",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  # "Operating System :: Microsoft :: Windows",  # TODO: Needs testing
+  "Operating System :: POSIX",
+  "Operating System :: Unix",
+  "Framework :: AsyncIO",
+  "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy >= 1.14",
+  "black >= 24.10",
+  "flake8 >= 7.1",
+  "Flake8-pyproject >= 1.2",
+  "isort >= 5.13",
+  "ruff >= 0.9",
+]
+build = ["build >= 1.2"]
+test = ["pytest >= 8.3", "pytest-asyncio >= 0.26"]
+
+[project.scripts]
+tstorage-client = "tstorage_client.__main__:main"
+
+[project.urls]
+Homepage = "https://atende.industries/"
+
+[tool]
+[tool.setuptools]
+
+[tool.mypy]
+exclude = ["build/"]
+plugins = []
+enable_error_code = ["possibly-undefined", "redundant-expr"]
+strict = true
+
+[tool.black]
+line-length = 120
+
+[tool.flake8]
+max-line-length = 120
+count = true
+ignore = ["E203", "E302", "E501", "W503", "E701", "E704"]
+
+[tool.isort]
+profile = "black"
+lines_after_imports = 2
+
+[tool.ruff]
+line-length = 120
+
+[tool.pytest.ini_options]
+markers = [
+  "integration: Integration tests to be run with real TStorage"
+]
+addopts = "-m 'not integration'"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_mode = "auto"

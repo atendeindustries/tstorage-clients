@@ -1,0 +1,26 @@
+services:
+  tstorage_client_python:
+    build:
+      context: ../
+      dockerfile: ./tests/Dockerfile
+    volumes:
+      - type: bind
+        source: ../dist/
+        target: /tstorage_client/dist/
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../pyproject.toml
+        target: /tstorage_client/pyproject.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../tests/
+        target: /tstorage_client/tests/
+        read_only: true
+        bind:
+          create_host_path: false
+    network_mode: "host"
+    command: sh -c "pip install --force-reinstall dist/tstorage_client*.whl && pytest"

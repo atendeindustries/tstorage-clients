@@ -1,0 +1,17 @@
+.cache
+
+docs
+lib
+obj
+bin
+scratch
+
+*.txt
+!LICENSE.txt
+
+Doxyfile
+gmon*.out
+
+*.csv
+*.json
+*.pyc
