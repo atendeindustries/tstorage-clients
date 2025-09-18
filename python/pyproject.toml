@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 requires-python = ">= 3.10"
 name = "tstorage-client"
 description = "TStorage Python client library"
-version = "1.0.0"
+version = "1.0.1"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 readme = "README.md"

@@ -6,10 +6,10 @@ Built to simplify integration of TStorage with .NET-based projects, enabling dev
 
 ## Table of Contents
 
-- [Features](#features)  
-- [Requirements](#requirements)  
-- [Installation](#installation)  
-- [Usage](#usage)  
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
 - [Project Structure](#project-structure)
 - [Documentation](#documentation)
 - [License](#license)
@@ -18,7 +18,7 @@ Built to simplify integration of TStorage with .NET-based projects, enabling dev
 ## Features
 
 - Generic and self-contained `Channel<T>` module for simple communication and configuration.
-- Supports TStorage's `GET`, `GET_ACQ`, `GET_STREAM`, `PUT` and `PUTA` commands.
+- Supports `GET`, `GET_ACQ`, `GET_STREAM`, `PUT` and `PUTA` functionalities.
 - Allows creating custom serialization via `PayloadType<T>` interface.
 - Provides reliable methods to read data from TStorage with built-in error handling.
 - Ensures all operations are safe and exceptions are properly caught and managed.
@@ -34,7 +34,7 @@ Supported requests:
 ## Requirements
 
 - .NET SDK 8.0 or higher.
-- Compatible operating systems systems Linux, Windows and macOS.
+- Compatible operating systems: Linux, Windows and macOS.
 - No external dependencies required.
 
 
@@ -43,24 +43,24 @@ Supported requests:
 Since this library is not yet published as a NuGet package, you can use it in your project by following the steps below:
 
 1. Clone the repository.
-```bash
-git clone https://github.com/...
-```
+    ```bash
+    git clone https://github.com/atendeindustries/tstorage-clients.git
+    ```
 
 2. Add the library project to your solution.
-```bash
-dotnet sln add path/to/library/TStorage.csproj
-```
+    ```bash
+    dotnet sln add path/to/library/TStorage.csproj
+    ```
 
 3. Add the library project reference to your project.
-```bash
-dotnet add reference path/to/library/TStorage.csproj
-```
+    ```bash
+    dotnet add reference path/to/library/TStorage.csproj
+    ```
 
 4. Build the solution.
-```bash
-dotnet build
-```
+    ```bash
+    dotnet build
+    ```
 
 
 ## Usage
@@ -99,9 +99,9 @@ Documentation is generated using [Doxygen](https://www.doxygen.nl/), based on XM
 
 1. Install Doxygen.
 2. Run doxygen in TStorage project.
-```bash
-doxygen Doxyfile
-```
+    ```bash
+    doxygen Doxyfile
+    ```
 3. The generated documentation will be located in the `TStorage/docs/html/index.html`
 
 

@@ -46,6 +46,24 @@ class StructPayloadType(PayloadType[T]):
             return None
 
 
+class TuplePayloadType(PayloadType[tuple[Any, ...]]):
+    """Class for simple multi-struct module based serialization."""
+
+    def __init__(self, format: str) -> None:
+        self._format = struct.Struct(format)
+
+    def to_bytes(self, value: tuple[Any, ...]) -> bytes:
+        return self._format.pack(*value)
+
+    def from_bytes(self, buffer: bytes) -> tuple[Any, ...] | None:
+        value: tuple[Any, ...]
+        try:
+            value = self._format.unpack(buffer)
+            return value
+        except struct.error:
+            return None
+
+
 class UnitPayloadType(PayloadType[tuple[()]]):
     """Serialization of empty payloads."""
 
