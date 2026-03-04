@@ -4,10 +4,18 @@ import pytest
 
 from tstorage_client.payload_type import (
     BytesPayloadType,
+    NumpyPayloadType,
     PayloadType,
     StructPayloadType,
     UnitPayloadType,
 )
+
+
+try:
+    HAS_NUMPY = True
+    import numpy as np
+except ImportError:
+    HAS_NUMPY = False
 
 
 T = TypeVar("T")
@@ -81,3 +89,28 @@ def test_struct_payload_type_idnetity(payload_type: PayloadType[T], value: Any) 
     assert payload_type.from_bytes(payload_type.to_bytes(value)) == (
         pytest.approx(value) if isinstance(value, float) else value
     )
+
+
+if HAS_NUMPY:
+    basic_dtype = [
+        ("_size", np.int32),
+        ("cid", np.int32),
+        ("mid", np.int64),
+        ("moid", np.int32),
+        ("cap", np.int64),
+        ("acq", np.int64),
+    ]
+
+    @pytest.mark.parametrize(
+        "payload_type,value",
+        [
+            (NumpyPayloadType(None), np.dtype(basic_dtype)),
+            (NumpyPayloadType([]), np.dtype(basic_dtype)),
+            (NumpyPayloadType([("c1", np.int32)]), np.dtype(basic_dtype + [("c1", np.int32)])),
+            (NumpyPayloadType(np.dtype([("c1", np.int32)])), np.dtype(basic_dtype + [("c1", np.int32)])),
+            (NumpyPayloadType(np.dtype(np.int32)), np.dtype(basic_dtype + [("v0", np.int32)])),
+            (NumpyPayloadType(np.int32), np.dtype(basic_dtype + [("v0", np.int32)])),
+        ],
+    )
+    def test_np_payload_type(payload_type: NumpyPayloadType, value: Any) -> None:
+        assert payload_type.parsing_dtype == value

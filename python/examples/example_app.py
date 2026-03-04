@@ -14,7 +14,7 @@ def load_records_from_csv(path: Path, separator: str | None = ",") -> Iterator[R
     with path.open() as file:
         for line in file:
             parts: list[str] = line.split(separator)
-            key: Key = Key(*(int(p) for p in parts[:4]))
+            key: Key = Key(int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]))
             yield Record(key, bytes.fromhex(parts[4]))
 
 

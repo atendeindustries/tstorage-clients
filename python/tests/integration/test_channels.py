@@ -21,12 +21,20 @@ from tstorage_client.channel import Channel
 from tstorage_client.channel_async import AsyncChannel
 from tstorage_client.payload_type import (
     BytesPayloadType,
+    NumpyPayloadType,
     StructPayloadType,
     UnitPayloadType,
 )
 from tstorage_client.record import Key, Record
 from tstorage_client.records_set import RecordsSet
 from tstorage_client.response import ResponseAcq
+
+
+try:
+    HAS_NUMPY = True
+    import numpy as np
+except ImportError:
+    HAS_NUMPY = False
 
 
 pytestmark = pytest.mark.integration
@@ -133,6 +141,8 @@ async def tstorage_integration_test_impl(channel: Channel[int], async_channel: A
     await get_iter_bad_payload_type_async(async_channel)
     work_with_many_records()
     await work_with_many_records_async()
+    if HAS_NUMPY:
+        work_with_numpy()
 
 
 def get_empty(channel: Channel[int]) -> None:
@@ -674,3 +684,19 @@ async def work_with_many_records_async() -> None:
                 case ResponseAcq():
                     assert bool(yielded)
         assert result_iter == records
+
+
+if HAS_NUMPY:
+
+    def work_with_numpy() -> None:
+        print("work_with_numpy")
+        payload_type = NumpyPayloadType(np.int32)
+        records = np.array([(0, 78, 47, 0, 123, 153, 0), (0, 78, 47, 1, 123, 153, 1)], payload_type.parsing_dtype)
+        with Channel(TSTORAGE_HOST, TSTORAGE_PORT, payload_type) as ch:
+            assert bool(ch.puta(records))
+            result = ch.get(Key(78, 47, 0, 123, 153), Key(79, 48, 2, 124, 154))
+            assert bool(result)
+            records_get = result.data[0]
+            records_get["_size"] = 0
+            records["_size"] = 0
+            assert (result.data[0] == records).all()

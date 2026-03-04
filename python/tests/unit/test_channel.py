@@ -6,10 +6,17 @@ import pytest
 
 from tstorage_client._channel_common import ReceiveBuffer, RequestHeader
 from tstorage_client.channel import Channel
-from tstorage_client.payload_type import StructPayloadType
+from tstorage_client.payload_type import NumpyPayloadType, StructPayloadType
 from tstorage_client.record import Key, Record
 from tstorage_client.records_set import RecordsSet
 from tstorage_client.response import Response, ResponseAcq, ResponseGet, ResponseStatus
+
+
+try:
+    HAS_NUMPY = True
+    import numpy as np
+except ImportError:
+    HAS_NUMPY = False
 
 
 T = TypeVar("T")
@@ -523,3 +530,43 @@ def test_channel_get_iter(
     status = [s for s in results if isinstance(s, ResponseAcq)][0]
     assert status == expected
     assert len(records) == recs
+
+
+if HAS_NUMPY:
+
+    @pytest.fixture
+    def records_numpy() -> RecordsSet[np.ndarray]:
+        dt = NumpyPayloadType(np.int32).parsing_dtype
+        return np.rec.fromrecords([(0, 78, 47, 0, 123, 153, 0), (0, 78, 47, 1, 123, 153, 1)], dt)
+
+    @pytest.fixture
+    def channel_numpy() -> Channel[np.ndarray]:
+        payload_type = NumpyPayloadType(np.int32)
+        return Channel(TSTORAGE_HOST, TSTORAGE_PORT, payload_type)
+
+    @pytest.mark.parametrize(
+        "response,expected",
+        [
+            (b"", Response(ResponseStatus.DISCONNECTED)),
+            (RequestHeader(0, 16).to_bytes() + b"\x00" * 16, Response(ResponseStatus.OK)),
+            (RequestHeader(0, 20).to_bytes() + b"\x00" * 20, Response(ResponseStatus.OK)),
+            (RequestHeader(0, 16).to_bytes() + b"\x00" * 20, Response(ResponseStatus.OK)),
+            (RequestHeader(1, 0).to_bytes(), Response(ResponseStatus.ERROR)),
+            (RequestHeader(1, 8).to_bytes() + b"\x00" * 8, Response(ResponseStatus.ERROR)),
+            (RequestHeader(1, 8).to_bytes() + b"\x00" * 16, Response(ResponseStatus.ERROR)),
+            (RequestHeader(123, 0).to_bytes(), Response(ResponseStatus.ERROR)),
+        ],
+    )
+    def test_channel_get_put_numpy(
+        channel_numpy: Channel[np.ndarray],
+        records_numpy: RecordsSet[np.recarray],
+        response: bytes,
+        expected: Response,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        feeder = BufferFeeder()
+        monkeypatch.setattr(channel_numpy, "_socket", ())
+        monkeypatch.setattr(channel_numpy, "_send_data", lambda _: None)
+        monkeypatch.setattr(channel_numpy, "_feed_buffer", functools.partial(feeder.feed, data=response))
+        assert channel_numpy.put(records_numpy) == expected
+        assert channel_numpy.puta(records_numpy) == expected

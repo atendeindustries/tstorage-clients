@@ -7,6 +7,7 @@
 .reviewboardrc
 __pycache__/
 venv/
+pypy_venv/
 build/
 dist/
 *.egg-info

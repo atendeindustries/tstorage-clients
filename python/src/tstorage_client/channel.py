@@ -19,7 +19,7 @@ from ._channel_common import (
     _ChannelMixin,
     _CommandType,
 )
-from .payload_type import PayloadType
+from .payload_type import NumpyPayloadType, PayloadType
 from .record import Key, Record
 from .records_set import GetCallback, RecordsSet
 from .response import Response, ResponseAcq, ResponseGet, ResponseStatus
@@ -92,11 +92,9 @@ class Channel(_ChannelMixin[T]):
             OK status if connected else ERROR status.
         """
         try:
-            self._socket = socket.create_connection((self._host, self._port), self._timeout)
-            if self._ssl_context is not None:
-                self._socket = self._ssl_context.wrap_socket(self._socket, server_hostname=self._host)
+            self.__enter__()
             return Response(ResponseStatus.OK)
-        except OSError:
+        except Exception:
             return Response(ResponseStatus.ERROR)
 
     def close(self) -> Response:
@@ -121,12 +119,12 @@ class Channel(_ChannelMixin[T]):
         """Connect and close this Channel in context manager.
 
         Raises:
-            socket.error: If connect fails.
+            Whatever socket.{create_connection, close} or SSLContext.wrap_socket raises.
         """
-        if self.connect():
-            return self
-        else:
-            raise OSError()
+        self._socket = socket.create_connection((self._host, self._port), self._timeout)
+        if self._ssl_context is not None:
+            self._socket = self._ssl_context.wrap_socket(self._socket, server_hostname=self._host)
+        return self
 
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
@@ -168,9 +166,14 @@ class Channel(_ChannelMixin[T]):
             return Response(ResponseStatus.DISCONNECTED)
         request: bytes = RequestHeader(cmd, HEADER_AUX_SIZE).to_bytes()
         self._send_data(request)
+        serializing_function = (
+            self._serialize_records_batches_iter_numpy
+            if isinstance(self._payload_type, NumpyPayloadType)
+            else self._serialize_records_batches_iter
+        )
         try:
-            for batch in self._serialize_records_batches_iter(
-                data, cmd == _CommandType.PUTASAFE, self._payload_type, max_batch_size, skip_invalid
+            for batch in serializing_function(
+                data, cmd == _CommandType.PUTASAFE, self._payload_type, max_batch_size, skip_invalid  # type: ignore[arg-type]
             ):
                 self._send_data(batch)
             self._send_data(struct.pack("<i", PUT_END_GUARD))
@@ -233,6 +236,9 @@ class Channel(_ChannelMixin[T]):
         buffer: ReceiveBuffer = ReceiveBuffer(
             recv_buffer_size if self._memory_limit is None else min(recv_buffer_size, self._memory_limit)
         )
+        parsing_function = (
+            self._parse_records_numpy if isinstance(self._payload_type, NumpyPayloadType) else self._parse_records
+        )
         records: RecordsSet[T] = []
         while bytes_received := self._feed_buffer(buffer):
             total_bytes += bytes_received
@@ -245,7 +251,7 @@ class Channel(_ChannelMixin[T]):
                         return self._early_close(ResponseGet(ResponseStatus.BAD_REQUEST, data=records))
                     stage = GetRequestState.RECORDS_PARSING
             if stage == GetRequestState.RECORDS_PARSING:
-                match self._parse_records(buffer, records, self._payload_type, self._memory_limit):
+                match parsing_function(buffer, records, self._payload_type, self._memory_limit):  # type: ignore[arg-type]
                     case RecordsParsingStatus.NEEDS_MORE_BYTES:
                         continue
                     case RecordsParsingStatus.FINISHED:
@@ -290,7 +296,10 @@ class Channel(_ChannelMixin[T]):
         buffer: ReceiveBuffer = ReceiveBuffer(
             recv_buffer_size if self._memory_limit is None else min(recv_buffer_size, self._memory_limit)
         )
-        records: list[Record[T]] = []
+        parsing_function = (
+            self._parse_records_numpy if isinstance(self._payload_type, NumpyPayloadType) else self._parse_records
+        )
+        records: list[T] = []
         while bytes_received := self._feed_buffer(
             buffer, self._memory_limit - total_bytes if self._memory_limit else 0
         ):
@@ -302,11 +311,11 @@ class Channel(_ChannelMixin[T]):
                         return self._early_close(ResponseAcq(ResponseStatus.BAD_REQUEST))
                     stage = GetRequestState.RECORDS_PARSING
             if stage == GetRequestState.RECORDS_PARSING:
-                match self._parse_records(buffer, records, self._payload_type, self._memory_limit):
+                match parsing_function(buffer, records, self._payload_type, self._memory_limit):  # type: ignore[arg-type]
                     case RecordsParsingStatus.NEEDS_MORE_BYTES:
                         if self._is_at_memory_limit(total_bytes):
                             if records:
-                                callback(records)
+                                callback(records)  # type: ignore[arg-type]
                                 records.clear()
                                 total_bytes = 0
                                 continue
@@ -314,19 +323,19 @@ class Channel(_ChannelMixin[T]):
                                 return self._early_close(ResponseAcq(ResponseStatus.NO_MEMORY))
                     case RecordsParsingStatus.FINISHED:
                         if records:
-                            callback(records)
+                            callback(records)  # type: ignore[arg-type]
                             records.clear()
                             total_bytes = 0
                         stage = GetRequestState.FINAL_HEADER
                     case RecordsParsingStatus.UNPARSEABLE:
                         if records:
-                            callback(records)
+                            callback(records)  # type: ignore[arg-type]
                             records.clear()
                             total_bytes = 0
                         return self._early_close(ResponseAcq(ResponseStatus.UNPARSEABLE_ENTITY))
                     case RecordsParsingStatus.RECORD_TOO_BIG:
                         if records:
-                            callback(records)
+                            callback(records)  # type: ignore[arg-type]
                             records.clear()
                             total_bytes = 0
                         return self._early_close(ResponseAcq(ResponseStatus.NO_MEMORY))
@@ -337,7 +346,7 @@ class Channel(_ChannelMixin[T]):
                         return ResponseAcq(ResponseStatus.OK, response_data[0])
                     return self._early_close(ResponseAcq(ResponseStatus.ERROR))
         if records:
-            callback(records)
+            callback(records)  # type: ignore[arg-type]
         return self._early_close(ResponseAcq(ResponseStatus.DISCONNECTED))
 
     def get_iter(self, key_min: Key, key_max: Key, recv_buffer_size: int = 65536) -> Iterator[Record[T] | ResponseAcq]:
@@ -367,6 +376,9 @@ class Channel(_ChannelMixin[T]):
         buffer: ReceiveBuffer = ReceiveBuffer(
             recv_buffer_size if self._memory_limit is None else min(recv_buffer_size, self._memory_limit)
         )
+        parsing_function = (
+            self._parse_records_numpy if isinstance(self._payload_type, NumpyPayloadType) else self._parse_records
+        )
         records: list[Record[T]] = []
         while bytes_received := self._feed_buffer(buffer):
             total_bytes += bytes_received
@@ -382,8 +394,8 @@ class Channel(_ChannelMixin[T]):
                         return
                     stage = GetRequestState.RECORDS_PARSING
             if stage == GetRequestState.RECORDS_PARSING:
-                parsing_status: RecordsParsingStatus = self._parse_records(
-                    buffer, records, self._payload_type, self._memory_limit
+                parsing_status: RecordsParsingStatus = parsing_function(
+                    buffer, records, self._payload_type, self._memory_limit  # type: ignore[arg-type]
                 )
                 yield from records
                 records.clear()

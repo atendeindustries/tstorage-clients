@@ -1,4 +1,5 @@
 import struct
+from operator import itemgetter
 from typing import Any
 
 import pytest
@@ -10,9 +11,16 @@ from tstorage_client._channel_common import (
     _ChannelMixin,
     _CommandType,
 )
-from tstorage_client.payload_type import StructPayloadType
+from tstorage_client.payload_type import NumpyPayloadType, StructPayloadType
 from tstorage_client.record import Key, Record
 from tstorage_client.records_set import RecordsSet
+
+
+try:
+    HAS_NUMPY = True
+    import numpy as np
+except ImportError:
+    HAS_NUMPY = False
 
 
 @pytest.mark.parametrize(
@@ -91,7 +99,7 @@ def test_mixin_prepare_keyrange_request(cmd: _CommandType, key_min: Key, key_max
 )
 def test_mixin_parse_record(data: bytes, expected: Record[int] | None) -> None:
     payload_type = StructPayloadType[int]("<i")
-    assert _ChannelMixin._parse_record(data, payload_type) == expected
+    assert _ChannelMixin._parse_record(data, 0, len(data), payload_type) == expected
 
 
 def test_mixin_group_records_by_cid() -> None:
@@ -191,3 +199,31 @@ def test_mixin_parse_records(
     buffer = ReceiveBuffer()
     buffer.feed(data)
     assert _ChannelMixin._parse_records(buffer, records, payload_type, None) == expected
+
+
+if HAS_NUMPY:
+
+    def test_mixin_group_numpy_by_cid() -> None:
+        dt = NumpyPayloadType(np.int32)
+        rec_dt = dt.parsing_dtype
+        records = {
+            "cid": np.array([1, 0, 10, 10, 1, 0, 0], dtype=np.int32),
+            "mid": np.array([1, 0, 0, 1, 0, 0, 0], dtype=np.int64),
+            "moid": np.array([0, 2, 0, 0, 0, 0, 1], dtype=np.int32),
+            "cap": np.array([1234, 1234, 10, 11, 1234, 1234, 1234], dtype=np.int64),
+            "acq": np.array([-1, -1, -1, -1, -1, -1, -1], dtype=np.int64),
+            "v0": np.array([0, 0, 0, 0, 0, 0, 0], dtype=np.int32),
+        }
+        records_grouped = [
+            (
+                np.int32(0),
+                np.rec.fromrecords(
+                    [(36, 0, 0, 2, 1234, -1, 0), (36, 0, 0, 0, 1234, -1, 0), (36, 0, 0, 1, 1234, -1, 0)], dtype=rec_dt
+                ),
+            ),
+            (np.int32(1), np.rec.fromrecords([(36, 1, 1, 0, 1234, -1, 0), (36, 1, 0, 0, 1234, -1, 0)], dtype=rec_dt)),
+            (np.int32(10), np.rec.fromrecords([(36, 10, 0, 0, 10, -1, 0), (36, 10, 1, 0, 11, -1, 0)], dtype=rec_dt)),
+        ]
+        grouped = sorted(list(_ChannelMixin._group_numpy_by_cid(records, rec_dt)), key=itemgetter(0))
+        for (_, l), (_, r) in zip(grouped, records_grouped):
+            assert np.all(l == r)

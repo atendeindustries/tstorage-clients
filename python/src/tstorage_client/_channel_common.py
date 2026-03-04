@@ -4,9 +4,16 @@ from dataclasses import dataclass
 from enum import Enum, IntEnum
 from typing import Any, ClassVar, Generic, Iterable, Literal, TypeVar
 
-from .payload_type import PayloadType
+from .payload_type import NumpyPayloadType, PayloadType
 from .record import Key, Record
 from .records_set import RecordsSet
+
+
+try:
+    HAS_NUMPY = True
+    import numpy
+except ImportError:
+    HAS_NUMPY = False
 
 
 T = TypeVar("T")
@@ -26,6 +33,9 @@ FULL_KEY_SIZE: Literal[32] = 32
 HEADER_AUX_SIZE: Literal[0] = 0
 PUT_END_GUARD: Literal[-1] = -1
 RESPONSE_HEADER_SIZE: Literal[12] = 12
+
+if HAS_NUMPY:
+    RECORD_BASE_DTYPE = [("_size", numpy.int32)] + Key._numpy_dtype_list  # type: ignore[possibly-undefined]
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,8 +96,7 @@ class ReceiveBuffer:
         return self._memory[self._available :]
 
     def feed(self, data: bytes) -> None:
-        size: int = len(data)
-        new_available: int = self._available + size
+        new_available: int = self._available + len(data)
         assert new_available <= len(self._memory)
         self._memory[self._available : new_available] = data
         self._available = new_available
@@ -131,14 +140,14 @@ class _ChannelMixin(Generic[T]):
 
     @staticmethod
     def _prepare_keyrange_request(cmd: _CommandType, key_min: Key, key_max: Key, aux_size: int = 0) -> bytes:
-        return b"".join(e.to_bytes() for e in (RequestHeader(cmd, aux_size), key_min, key_max))
+        return RequestHeader(cmd, aux_size).to_bytes() + key_min.to_bytes() + key_max.to_bytes()
 
     @staticmethod
-    def _parse_record(buffer: bytes, payload_type: PayloadType[T]) -> Record[T] | None:
-        key: Key | None = Key.from_bytes(buffer[:FULL_KEY_SIZE])
+    def _parse_record(buffer: memoryview, offset: int, size: int, payload_type: PayloadType[T]) -> Record[T] | None:
+        key: Key | None = Key.from_bytes(buffer, offset)
         if key is None:
             return None
-        value: T | None = payload_type.from_bytes(buffer[FULL_KEY_SIZE:])
+        value: T | None = payload_type.from_bytes(buffer[offset + FULL_KEY_SIZE : offset + size])
         if value is None:
             return None
         return Record(key, value)
@@ -158,6 +167,9 @@ class _ChannelMixin(Generic[T]):
         max_batch_size: int = 2147483647,
         skip_invalid: bool = False,
     ) -> Iterable[bytes]:
+        double_int_packer = struct.Struct("<ii")
+        int_packer = struct.Struct("<i")
+        int_size: int = int_packer.size
         raw_records: bytearray = bytearray()
         for cid, records in _ChannelMixin._group_records_by_cid(data).items():
             for record in records:
@@ -165,18 +177,18 @@ class _ChannelMixin(Generic[T]):
                     if skip_invalid:
                         continue
                     else:
-                        yield b"".join((struct.pack("<ii", cid, len(raw_records)), raw_records))
+                        yield double_int_packer.pack(cid, len(raw_records)) + raw_records
                         return
                 raw_key: bytes = record.key.to_bytes(with_cid=False, with_acq=with_acq)
                 raw_payload: bytes = payload_type.to_bytes(record.value)
                 size: int = len(raw_key) + len(raw_payload)
-                if 0 < len(raw_records) > (max_batch_size - size):
-                    yield b"".join((struct.pack("<ii", cid, len(raw_records)), raw_records))
+                if 0 < len(raw_records) > (max_batch_size - size - int_size):
+                    yield double_int_packer.pack(cid, len(raw_records)) + raw_records
                     raw_records.clear()
-                raw_records += struct.pack("<i", size)
+                raw_records += int_packer.pack(size)
                 raw_records += raw_key
                 raw_records += raw_payload
-            yield b"".join((struct.pack("<ii", cid, len(raw_records)), raw_records))
+            yield double_int_packer.pack(cid, len(raw_records)) + raw_records
             raw_records.clear()
 
     @staticmethod
@@ -196,27 +208,97 @@ class _ChannelMixin(Generic[T]):
         buffer: ReceiveBuffer, records: RecordsSet[T], payload_type: PayloadType[T], max_size: int | None
     ) -> RecordsParsingStatus:
         int_parser = struct.Struct("<i")
-        while buffer.fits(int_parser.size):
-            record_size: int = int_parser.unpack(buffer.peek(int_parser.size))[0]
+        parser_size: int = int_parser.size
+        buffer_direct_access: memoryview = buffer.peek(len(buffer))
+        offset: int = 0
+        while True:
+            try:
+                record_size: int = int_parser.unpack_from(buffer_direct_access, offset)[0]
+            except struct.error:
+                break
+            offset += parser_size
             if record_size == 0:
-                buffer.increase(int_parser.size)
+                buffer.increase(offset)
                 buffer.truncate()  # Truncate so confirmation header fits
                 return RecordsParsingStatus.FINISHED
-            elif buffer.fits(int_parser.size + record_size):
+            if len(buffer_direct_access) - offset >= record_size:
                 record: Record[T] | None = _ChannelMixin._parse_record(
-                    buffer.peek(record_size, int_parser.size), payload_type
+                    buffer_direct_access, offset, record_size, payload_type
                 )
-                buffer.increase(int_parser.size + record_size)
                 if record is None:
                     return RecordsParsingStatus.UNPARSEABLE
+                offset += record_size
                 records.append(record)
-            elif max_size is not None and int_parser.size + record_size > max_size:
+            elif max_size is not None and parser_size + record_size > max_size:
                 return RecordsParsingStatus.RECORD_TOO_BIG
             else:
+                offset -= parser_size  # Keep size field in buffer
+                buffer.increase(offset)
                 buffer.truncate()  # Truncate so record will fit
-                if not buffer.fits_eventually(int_parser.size + record_size):
-                    buffer.grow_buffer(int_parser.size + record_size)
+                if not buffer.fits_eventually(parser_size + record_size):
+                    buffer_direct_access.release()
+                    buffer.grow_buffer(parser_size + record_size)
                 return RecordsParsingStatus.NEEDS_MORE_BYTES
-        if not buffer.fits_eventually(int_parser.size):
+        buffer.increase(offset)
+        if not buffer.fits_eventually(parser_size):
             buffer.truncate()
         return RecordsParsingStatus.NEEDS_MORE_BYTES
+
+    if HAS_NUMPY:
+
+        @staticmethod
+        def _group_numpy_by_cid(
+            data: dict[str, numpy.ndarray] | numpy.ndarray | numpy.recarray, dtype: numpy.dtype
+        ) -> Iterable[tuple[numpy.int32, numpy.recarray]]:
+            arrs = data
+            if isinstance(data, dict):
+                arrs["_size"] = numpy.full(len(data["cid"]), dtype.itemsize - 4, dtype=numpy.int32)
+            else:
+                arrs["_size"] = dtype.itemsize - 4  # type: ignore[assignment]
+            cids = arrs["cid"]
+            uniques = numpy.unique(cids, sorted=False)
+            for cid in uniques:
+                indices = numpy.nonzero(cids == cid)
+                yield cid, numpy.rec.fromarrays([arrs[name][indices] for name in dtype.fields], dtype=dtype)  # type: ignore[union-attr]
+
+        @staticmethod
+        def _serialize_records_batches_iter_numpy(
+            data: dict[str, numpy.ndarray] | numpy.ndarray | numpy.recarray,
+            with_acq: bool,
+            payload_type: NumpyPayloadType,
+            max_batch_size: int = 2147483647,
+            _: bool = False,
+        ) -> Iterable[bytes]:
+            double_int_packer = struct.Struct("<ii")
+            buf = bytearray(double_int_packer.size)
+            dtype = payload_type.serializer_dtype_with_acq if with_acq else payload_type.serializer_dtype_no_acq
+            for cid, array in _ChannelMixin._group_numpy_by_cid(data, dtype):
+                count_per_batch: int = max_batch_size // array.itemsize
+                i: int = 0
+                while view := array.data[i : i + count_per_batch]:
+                    double_int_packer.pack_into(buf, 0, cid, view.nbytes)
+                    yield buf
+                    yield view
+                    i += count_per_batch
+
+        @staticmethod
+        def _parse_records_numpy(
+            buffer: ReceiveBuffer, records: list[numpy.ndarray], dtype: NumpyPayloadType, max_size: int | None = None
+        ) -> RecordsParsingStatus:
+            buffer_direct_access: memoryview = buffer.peek(len(buffer))
+            count: int = len(buffer_direct_access) // dtype.parsing_dtype.itemsize
+            records_size: int = dtype.parsing_dtype.itemsize * count
+            recs_array = numpy.frombuffer(buffer_direct_access[:records_size], dtype.parsing_dtype, count)
+            if recs_array.size != 0:
+                records.append(recs_array.copy())
+            buffer.increase(records_size)
+            buffer.truncate()  # Truncate so record will fit
+            try:
+                record_size: int = struct.unpack_from("<i", buffer_direct_access, 0)[0]
+            except struct.error:
+                return RecordsParsingStatus.NEEDS_MORE_BYTES
+            if record_size == 0:
+                buffer.increase(4)
+                buffer.truncate()  # Truncate so confirmation header fits
+                return RecordsParsingStatus.FINISHED
+            return RecordsParsingStatus.NEEDS_MORE_BYTES

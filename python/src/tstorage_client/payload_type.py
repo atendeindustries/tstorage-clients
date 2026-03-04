@@ -2,10 +2,22 @@
 
 import struct
 from abc import ABC, abstractmethod
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, ClassVar, Generic, Literal, TypeVar
+
+from tstorage_client.record import Key
 
 
-__all__ = "PayloadType", "StructPayloadType", "UnitPayloadType", "BytesPayloadType"
+try:
+    HAS_NUMPY = True
+    import numpy
+except ImportError:
+    HAS_NUMPY = False
+
+
+__all__ = ["PayloadType", "StructPayloadType", "TuplePayloadType", "UnitPayloadType", "BytesPayloadType"]
+
+if HAS_NUMPY:
+    __all__.append("NumpyPayloadType")
 
 
 T = TypeVar("T")
@@ -91,3 +103,53 @@ class BytesPayloadType(PayloadType[bytes]):
     def from_bytes(self, buffer: bytes) -> bytes:
         """Returns buffer as is."""
         return bytes(buffer)
+
+
+class NumpyPayloadType(PayloadType[Any]):
+    """Support for NumPy based data retrieval and processing.
+
+    With NumpyPayloadType (Async)Channel.put(a) accepts:
+     - NumPy's structured array or Recarray with '_size' field of any values and standard Record fields.
+     - Dictionary of NumPy's arrays of standard Record fields.
+
+    With NumpyPayloadType (Async)Channel.get functions family returns NumPy's structured array with standard Record fields.
+    """
+
+    _init_args: ClassVar = list[tuple[str, type]] | numpy.dtype | None if HAS_NUMPY else Any
+
+    def __init__(self, dtype: _init_args) -> None:
+        if not HAS_NUMPY:
+            raise RuntimeError("NumPy is not installed!")
+        size_dtype = [("_size", numpy.int32)]
+        if dtype is None:
+            dtype = []
+        if isinstance(dtype, list):
+            self.serializer_dtype_with_acq = numpy.dtype(size_dtype + Key._numpy_dtype_list[1:] + dtype)
+            self.serializer_dtype_no_acq = numpy.dtype(size_dtype + Key._numpy_dtype_list[1:-1] + dtype)
+            self.parsing_dtype = numpy.dtype(size_dtype + Key._numpy_dtype_list + dtype)
+            self.record_dtype = numpy.dtype(Key._numpy_dtype_list + dtype)
+        else:
+            wrapped = numpy.dtype(dtype)
+            if wrapped.fields is None:
+                wrapped = numpy.dtype([("v0", wrapped)])
+            self.serializer_dtype_with_acq = numpy.dtype(
+                size_dtype + Key._numpy_dtype_list[1:] + [(name, desc[0]) for name, desc in wrapped.fields.items()]
+            )
+            self.serializer_dtype_no_acq = numpy.dtype(
+                size_dtype + Key._numpy_dtype_list[1:-1] + [(name, desc[0]) for name, desc in wrapped.fields.items()]
+            )
+            self.parsing_dtype = numpy.dtype(
+                size_dtype + Key._numpy_dtype_list + [(name, desc[0]) for name, desc in wrapped.fields.items()]
+            )
+            self.record_dtype = numpy.dtype(
+                Key._numpy_dtype_list + [(name, desc[0]) for name, desc in wrapped.fields.items()]
+            )
+
+    def to_bytes(self, array: Any) -> bytes:
+        return array.tobytes()  # type: ignore[no-any-return]
+
+    def from_bytes(self, buffer: bytes) -> Any | None:
+        try:
+            return numpy.frombuffer(buffer)
+        except ValueError:
+            return None

@@ -19,7 +19,7 @@ from ._channel_common import (
     _ChannelMixin,
     _CommandType,
 )
-from .payload_type import PayloadType
+from .payload_type import NumpyPayloadType, PayloadType
 from .record import Key, Record
 from .records_set import GetCallback, RecordsSet
 from .response import Response, ResponseAcq, ResponseGet, ResponseStatus
@@ -80,11 +80,9 @@ class AsyncChannel(_ChannelMixin[T]):
             OK status if connected else ERROR status.
         """
         try:
-            reader, writer = await asyncio.open_connection(self._host, self._port, ssl=self._ssl_context)
-            self._writer = writer
-            self._reader = reader
+            await self.__aenter__()
             return Response(ResponseStatus.OK)
-        except ConnectionError:
+        except Exception:
             return Response(ResponseStatus.ERROR)
 
     async def close(self) -> Response:
@@ -112,12 +110,12 @@ class AsyncChannel(_ChannelMixin[T]):
         """Connect and close this AsyncChannel in async context manager.
 
         Raises:
-            ConnectionError: If connect fails.
+            Whatever asyncio.open_connection raises.
         """
-        if await self.connect():
-            return self
-        else:
-            raise ConnectionError()
+        reader, writer = await asyncio.open_connection(self._host, self._port, ssl=self._ssl_context)
+        self._writer = writer
+        self._reader = reader
+        return self
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
@@ -161,9 +159,14 @@ class AsyncChannel(_ChannelMixin[T]):
             return Response(ResponseStatus.DISCONNECTED)
         request: bytes = RequestHeader(cmd, HEADER_AUX_SIZE).to_bytes()
         await self._send_data(request)
+        serializing_function = (
+            self._serialize_records_batches_iter_numpy
+            if isinstance(self._payload_type, NumpyPayloadType)
+            else self._serialize_records_batches_iter
+        )
         try:
-            for batch in self._serialize_records_batches_iter(
-                data, cmd == _CommandType.PUTASAFE, self._payload_type, max_batch_size, skip_invalid
+            for batch in serializing_function(
+                data, cmd == _CommandType.PUTASAFE, self._payload_type, max_batch_size, skip_invalid  # type: ignore[arg-type]
             ):
                 await self._send_data(batch)
             await self._send_data(struct.pack("<i", PUT_END_GUARD))
@@ -226,6 +229,9 @@ class AsyncChannel(_ChannelMixin[T]):
         buffer: ReceiveBuffer = ReceiveBuffer(
             recv_buffer_size if self._memory_limit is None else min(recv_buffer_size, self._memory_limit)
         )
+        parsing_function = (
+            self._parse_records_numpy if isinstance(self._payload_type, NumpyPayloadType) else self._parse_records
+        )
         records: RecordsSet[T] = []
         while bytes_received := await self._feed_buffer(buffer):
             total_bytes += bytes_received
@@ -238,7 +244,7 @@ class AsyncChannel(_ChannelMixin[T]):
                         return await self._early_close(ResponseGet(ResponseStatus.BAD_REQUEST, data=records))
                     stage = GetRequestState.RECORDS_PARSING
             if stage == GetRequestState.RECORDS_PARSING:
-                match self._parse_records(buffer, records, self._payload_type, self._memory_limit):
+                match parsing_function(buffer, records, self._payload_type, self._memory_limit):  # type: ignore[arg-type]
                     case RecordsParsingStatus.NEEDS_MORE_BYTES:
                         continue
                     case RecordsParsingStatus.FINISHED:
@@ -283,7 +289,10 @@ class AsyncChannel(_ChannelMixin[T]):
         buffer: ReceiveBuffer = ReceiveBuffer(
             recv_buffer_size if self._memory_limit is None else min(recv_buffer_size, self._memory_limit)
         )
-        records: list[Record[T]] = []
+        parsing_function = (
+            self._parse_records_numpy if isinstance(self._payload_type, NumpyPayloadType) else self._parse_records
+        )
+        records: list[T] = []
         while bytes_received := await self._feed_buffer(
             buffer, self._memory_limit - total_bytes if self._memory_limit else 0
         ):
@@ -295,11 +304,11 @@ class AsyncChannel(_ChannelMixin[T]):
                         return await self._early_close(ResponseAcq(ResponseStatus.BAD_REQUEST))
                     stage = GetRequestState.RECORDS_PARSING
             if stage == GetRequestState.RECORDS_PARSING:
-                match self._parse_records(buffer, records, self._payload_type, self._memory_limit):
+                match parsing_function(buffer, records, self._payload_type, self._memory_limit):  # type: ignore[arg-type]
                     case RecordsParsingStatus.NEEDS_MORE_BYTES:
                         if self._is_at_memory_limit(total_bytes):
                             if records:
-                                callback(records)
+                                callback(records)  # type: ignore[arg-type]
                                 records.clear()
                                 total_bytes = 0
                                 continue
@@ -307,19 +316,19 @@ class AsyncChannel(_ChannelMixin[T]):
                                 return await self._early_close(ResponseAcq(ResponseStatus.NO_MEMORY))
                     case RecordsParsingStatus.FINISHED:
                         if records:
-                            callback(records)
+                            callback(records)  # type: ignore[arg-type]
                             records.clear()
                             total_bytes = 0
                         stage = GetRequestState.FINAL_HEADER
                     case RecordsParsingStatus.UNPARSEABLE:
                         if records:
-                            callback(records)
+                            callback(records)  # type: ignore[arg-type]
                             records.clear()
                             total_bytes = 0
                         return await self._early_close(ResponseAcq(ResponseStatus.UNPARSEABLE_ENTITY))
                     case RecordsParsingStatus.RECORD_TOO_BIG:
                         if records:
-                            callback(records)
+                            callback(records)  # type: ignore[arg-type]
                             records.clear()
                             total_bytes = 0
                         return await self._early_close(ResponseAcq(ResponseStatus.NO_MEMORY))
@@ -330,7 +339,7 @@ class AsyncChannel(_ChannelMixin[T]):
                         return ResponseAcq(ResponseStatus.OK, response_data[0])
                     return await self._early_close(ResponseAcq(ResponseStatus.ERROR))
         if records:
-            callback(records)
+            callback(records)  # type: ignore[arg-type]
         return await self._early_close(ResponseAcq(ResponseStatus.DISCONNECTED))
 
     async def get_iter(
@@ -362,6 +371,9 @@ class AsyncChannel(_ChannelMixin[T]):
         buffer: ReceiveBuffer = ReceiveBuffer(
             recv_buffer_size if self._memory_limit is None else min(recv_buffer_size, self._memory_limit)
         )
+        parsing_function = (
+            self._parse_records_numpy if isinstance(self._payload_type, NumpyPayloadType) else self._parse_records
+        )
         records: list[Record[T]] = []
         while bytes_received := await self._feed_buffer(buffer):
             total_bytes += bytes_received
@@ -378,7 +390,7 @@ class AsyncChannel(_ChannelMixin[T]):
                         return
                     stage = GetRequestState.RECORDS_PARSING
             if stage == GetRequestState.RECORDS_PARSING:
-                parsing_status = self._parse_records(buffer, records, self._payload_type, self._memory_limit)
+                parsing_status = parsing_function(buffer, records, self._payload_type, self._memory_limit)  # type: ignore[arg-type]
                 for r in records:
                     yield r
                 records.clear()

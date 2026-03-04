@@ -18,7 +18,7 @@ Built to simplify integration of TStorage with python projects, enabling develop
     - [Timestamp helpers](#timestamp-helpers)
 - [Usage](#usage)
 - [Configuration](#configuration)
-- [Example app](#example-app)
+- [Example programs](#example-programs)
 - [License](#license)
 
 
@@ -27,20 +27,23 @@ Built to simplify integration of TStorage with python projects, enabling develop
 The main functionalities of the client are getting and adding new data from/to TStorage. Both socket and asyncio based connections are supported by Channel and AsyncChannel classes. Before sending any request, it is necessary to connect to a running TStorage instance. It can be done by using `connect()` and `close()` functions pairs or by context manager (`(async) with` statement).
 
 The following kinds of requests are supported:
- - `put` - add new records to TStorage where acq value is being set by TStorage
- - `puta` - add new records to TStorage where acq value is being set by user
- - `get_acq` - get last acq timestamp
- - `get` - get records
- - `get_stream` - get records in batches. Should be used when records may require more memory than the system can provide
- - `get_iter` - get records yielding one by one. Usable as iterator and also when records would require more memory than the system can provide
+ - `put` - add new records to TStorage where acq value is being set by TStorage.
+ - `puta` - add new records to TStorage where acq value is being set by user.
+ - `get_acq` - get last acq timestamp.
+ - `get` - get records.
+ - `get_stream` - get records in batches. Should be used when records may require more memory than the system can provide.
+ - `get_iter` - get records yielding one by one. Usable as iterator and also when records would require more memory than the system can provide.
 
 
 ## Requirements
 
 - python >= 3.10
 
-
 ### Optional
+
+ - numpy >= 2.0
+
+### Development
 
 - mypy >= 1.14
 - black >= 24.10
@@ -98,35 +101,35 @@ Interface for converting data to and from bytes:
 ### Key
 
 Represents a record identifier:
-- `cid` - client ID
-- `mid` - meter ID
-- `moid` - meter object ID
-- `cap` - capture timestamp in nanoseconds
-- `acq` - acquisition timestamp in nanoseconds, during normal operation, TStorage takes care of fulfilling this
+- `cid` - client ID.
+- `mid` - meter ID.
+- `moid` - meter object ID.
+- `cap` - capture timestamp in nanoseconds.
+- `acq` - acquisition timestamp in nanoseconds, during normal operation, TStorage takes care of fulfilling this.
 
 
 ### Record(Generic[T]) and RecordsSet(...)
 
-- `Record(Generic[T])` - binds a `Key` to a payload
-- `RecordsSet(...)` - a collection interface for records
+- `Record(Generic[T])` - binds a `Key` to a payload.
+- `RecordsSet(...)` - a collection interface for records.
 
 
 ### Responses
 
-- `Response` - base class for results
-- `ResponseGet(ResponseAcq, Generic[T])` - response containing result and `RecordsSet(...)`
-- `ResponseAcq(Response)` - response containing result and acquisition timestamp
+- `Response` - base class for results.
+- `ResponseGet(ResponseAcq, Generic[T])` - response containing result and `RecordsSet(...)`.
+- `ResponseAcq(Response)` - response containing result and acquisition timestamp.
 
 
 ### Timestamp helpers
 
 - `Tstoragedatetime` - stores nanosecond precise time in friendly manner, consists of python's dt.datetime and nanoseconds data
-    - `from_tstorage(timestamp: int | float) -> Tstoragedatetime  /  from_tstorage_ns(timestamp: int) -> Tstoragedatetime` - creates Tstoragedatetime from TStorage seconds/nanoseconds
-    - `from_unix(timestamp: int | float) -> Tstoragedatetime  /  from_unix_ns(timestamp: int) -> Tstoragedatetime` - creates Tstoragedatetime from unix seconds/nanoseconds
+    - `from_tstorage(timestamp: int | float) -> Tstoragedatetime  /  from_tstorage_ns(timestamp: int) -> Tstoragedatetime` - creates Tstoragedatetime from TStorage seconds/nanoseconds.
+    - `from_unix(timestamp: int | float) -> Tstoragedatetime  /  from_unix_ns(timestamp: int) -> Tstoragedatetime` - creates Tstoragedatetime from unix seconds/nanoseconds.
     - `to_tstorage() -> float  /  to_tstorage_ns() -> int` - converts Tstoragedatetime to TStorage seconds/nanoseconds
-    - `to_unix() -> float / to_unix_ns() -> int` - convert Tstoragedatetime to unix seconds/nanoseconds
-- `to_unix(timestamp: int | float) -> int | float  /  to_unix_ns(timestamp: int) -> int` - converts TStorage seconds/nanoseconds timestamp to unix seconds/nanoseconds timestamp
-- `from_unix(timestamp: int | float) -> int | float  /  from_unix_ns(timestamp: int) -> int` - converts unix seconds/nanoseconds timestamp to TStorage seconds/nanoseconds timestamp
+    - `to_unix() -> float / to_unix_ns() -> int` - convert Tstoragedatetime to unix seconds/nanoseconds.
+- `to_unix(timestamp: int | float) -> int | float  /  to_unix_ns(timestamp: int) -> int` - converts TStorage seconds/nanoseconds timestamp to unix seconds/nanoseconds timestamp.
+- `from_unix(timestamp: int | float) -> int | float  /  from_unix_ns(timestamp: int) -> int` - converts unix seconds/nanoseconds timestamp to TStorage seconds/nanoseconds timestamp.
 
 
 ## Usage
@@ -224,6 +227,82 @@ There are two path that we can follow:
 
 5. Check the basic example code in tstorage_clients/python/tests/integration/example_usage.py.
 
+## Usage with NumPy
+
+NumPy can be used directly for data parsing allowing for easier integration with existing data pipelines. Ease of use is demonstrated in the following snippets.
+
+1. First of all let's define some data to work on. *cid, mid, moid, cap, (acq)* are required as being part of the key. *_size* will be computed internally but it is required to preallocate space for it in a structure.
+    ```python
+    from tstorage_client.channel import Channel
+    from tstorage_client.payload_type import NumpyPayloadType
+    from tstorage_client.record import Key
+    from tstorage_client.timestamp import now_ns
+
+    rng = np.random.Generator(np.random.Philox(4))
+    count: int = 1024 * 1024
+    internal_size = np.zeros(count, dtype=np.int32)  # Only nedds to be preallocated
+    cid = rng.integers(0, 1, count, dtype=np.int32)
+    mid = rng.integers(0, 1024, count, dtype=np.int64)
+    moid = rng.integers(0, 1024, count, dtype=np.int32)
+    cap = rng.integers(2000, 2200, count, dtype=np.int64)
+    f0 = rng.integers(0, 1024, count, dtype=np.int32)
+    f1 = rng.integers(0, 1024, count, dtype=np.int32)
+    f2 = rng.uniform(0, 1024, count)
+
+    columns = [internal_size, cid, mid, moid, cap, f0, f1, f2]
+    names = "_size, cid, mid, moid, cap, f0, f1, f2"
+    data = np.rec.fromarrays(columns, names=names)
+    ```
+
+    Alternatively data can be defined as dictionary of arrays. *_size* is not required in this case.
+    ```python
+    data = {
+        "cid": cid,
+        "mid": mid,
+        "moid": moid,
+        "cap": cap,
+        "f0": f0,
+        "f1": f1,
+        "f2": f2,
+    }
+    ```
+
+2. We are going to process some data in a streaming way so it's time to prepare our data processing function. We are going to filter out all fields except *cap* and *f2*.
+    ```python
+    received_caps: list[np.ndarray] = []
+    received_f2: list[np.ndarray] = []
+
+    def records_filter(data: list[np.ndarray]) -> None:
+        for d in data:
+            received_caps.append(d["cap"])
+            received_f2.append(d["f2"])
+    ```
+
+3. To use NumPy based processing we need to use NumpyPayloadType as our payload type. It accepts standard numpy dtypes.
+    ```python
+    payload_type_serialzier = NumpyPayloadType("i,i,d")
+    with Channel(host, port, payload_type_serialzier, memory_limit=1024**2) as channel:
+        acq_before_put: int = now_ns()
+        put_response = channel.put(data)
+        acq_after_put: int = now_ns()
+        if not put_response.is_ok():
+            raise RuntimeError("Failed to put data to TStorage!")
+        key_min = Key(0, 0, 0, 0, acq_before_put)
+        key_max = Key(1024, 1024, 1024, now_ns(), acq_after_put)
+        get_response = channel.get_stream(key_min, key_max, records_filter)
+        if not get_response.is_ok():
+            raise RuntimeError("Failed to get data from TStorage!")
+    ```
+
+4. It is time to collect our result and show them.
+    ```python
+    caps_arr = np.concatenate(received_caps, dtype=np.int64)
+    f2_arr = np.concatenate(received_f2, dtype=np.float64)
+    print(caps_arr.shape, caps_arr)
+    print(f2_arr.shape, f2_arr)
+    ```
+
+
 ## Configuration
 
 The channel provides several options to help you customize your connection with TStorage:
@@ -232,15 +311,37 @@ The channel provides several options to help you customize your connection with 
 - `max_batch_size` - used in `put` and `puta` commands, controls maximal serialization buffer size.
 
 
-## Example app
+## Example programs
 
-In the library you can find also an example app that uses TStorage client. The app includes basic `put` and `get_iter` for iterative traversal of received records. To check how the application works, try the following command:
+The [`examples/`](examples/) directory contains several example programs that use TStorage client.
+
+### example_usage.py
+
+A simple application that connects to a TStorage instance at 127.0.0.1:2025, calls `Channel.put()` to put 3 records into the database (each being a tuple of `int`, `float` and `bool`), then calls `Channel.get()` to retrieve them, and prints them on standard output. Run the program:
 
 ```bash
-python -m tstorage_client
+python examples/example_usage.py
 ```
 
-You can browse tests for more examples.
+### example_numpy.py
+
+A simple application that applies NumPy both to put a large set of records to the TStorage database (using `Channel.put()`) and to filter records retrieved from the database (using `Channel.get_stream()`). Run the program:
+
+```bash
+python examples/example_numpy.py
+```
+
+### example_app.py
+
+A more versatile application, that connects to a TStorage instance, calls `Channel.put()` to put a set of records read from a CSV file, then calls `Channel.get_iter()` to retrieve a range of records iteratively. The application accepts command-line parameters for the address of the TStorage instance, location of the the CSV file, and the range of records to retrieve. Run the program with `-h` to display their descriptions:
+
+```bash
+python examples/example_app.py -h
+```
+
+### More examples
+
+You can browse the [`tests/`](tests/) directory for more examples.
 
 
 ## Tests

@@ -3,6 +3,13 @@ from dataclasses import dataclass
 from typing import ClassVar, Generic, TypeVar
 
 
+try:
+    HAS_NUMPY = True
+    import numpy
+except ImportError:
+    HAS_NUMPY = False
+
+
 __all__ = "Key", "Record"
 
 
@@ -29,7 +36,17 @@ class Key:
     cap: int = -1
     acq: int = -1
 
-    _to_bytes_format: ClassVar[struct.Struct] = struct.Struct("<iqiqq")
+    _from_bytes_format: ClassVar[struct.Struct] = struct.Struct("<iqiqq")
+
+    if HAS_NUMPY:
+        _numpy_dtype_list: ClassVar[list[tuple[str, type]]] = [
+            ("cid", numpy.int32),
+            ("mid", numpy.int64),
+            ("moid", numpy.int32),
+            ("cap", numpy.int64),
+            ("acq", numpy.int64),
+        ]
+        _numpy_dtype: ClassVar[numpy.dtype[numpy.void]] = numpy.dtype(_numpy_dtype_list)
 
     @classmethod
     def min(cls) -> "Key":
@@ -53,9 +70,9 @@ class Key:
                 raise TypeError()
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "Key | None":
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "Key | None":
         try:
-            key = cls(*cls._to_bytes_format.unpack(data))
+            key = cls(*cls._from_bytes_format.unpack_from(data, offset))
             return key if key.valid() else None
         except struct.error:
             return None
@@ -65,7 +82,7 @@ class Key:
 
     @classmethod
     def bytes_count(cls) -> int:
-        return cls._to_bytes_format.size
+        return cls._from_bytes_format.size
 
 
 @dataclass(order=True, frozen=True, slots=True)
